@@ -6,11 +6,21 @@ import seaborn as sns
 dataset_path = './tmp/kuairand-27k'
 processed_dataset_path = './tmp/processed/kuairand-27k'
 
+# mem consumption optimization
+kuairand_cols = ['user_id', 'video_id', 'play_time_ms', 'is_hate', 'time_ms']
+
+kuairand_dtypes = {
+    'user_id': 'int32',
+    'video_id': 'int32',
+    'is_hate': 'int8',
+    'play_time_ms': 'float32'
+}
+
 # 定义文件路径
-df1_part1 = pd.read_csv(f"{dataset_path}/log_standard_4_08_to_4_21_27k_part1.csv")
-df1_part2 = pd.read_csv(f"{dataset_path}/log_standard_4_08_to_4_21_27k_part2.csv")
-df2_part1 = pd.read_csv(f"{dataset_path}/log_standard_4_22_to_5_08_27k_part1.csv")
-df2_part2 = pd.read_csv(f"{dataset_path}/log_standard_4_22_to_5_08_27k_part2.csv")
+df1_part1 = pd.read_csv(f"{dataset_path}/log_standard_4_08_to_4_21_27k_part1.csv", usecols=kuairand_cols, dtype=kuairand_dtypes)
+df1_part2 = pd.read_csv(f"{dataset_path}/log_standard_4_08_to_4_21_27k_part2.csv", usecols=kuairand_cols, dtype=kuairand_dtypes)
+df2_part1 = pd.read_csv(f"{dataset_path}/log_standard_4_22_to_5_08_27k_part1.csv", usecols=kuairand_cols, dtype=kuairand_dtypes)
+df2_part2 = pd.read_csv(f"{dataset_path}/log_standard_4_22_to_5_08_27k_part2.csv", usecols=kuairand_cols, dtype=kuairand_dtypes)
 
 # 合并两个 DataFrame
 df = pd.concat([df1_part1, df1_part2, df2_part1, df2_part2])

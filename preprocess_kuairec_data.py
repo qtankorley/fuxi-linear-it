@@ -6,8 +6,16 @@ import seaborn as sns
 dataset_path = './tmp/kuairec'
 processed_dataset_path = './tmp/processed/kuairec'
 
+# mem consumption optimization
+kuairec_cols = ['user_id', 'video_id', 'timestamp']
+
+kuairec_dtypes = {
+    'user_id': 'int32',
+    'video_id': 'int32'
+}
+
 # 定义文件路径
-df = pd.read_csv(f'{dataset_path}/big_matrix.csv')
+df = pd.read_csv(f'{dataset_path}/big_matrix.csv', usecols=kuairec_cols, dtype=kuairec_dtypes)
 
 expected_max_user_id = df['user_id'].max()
 expected_max_video_id = df['video_id'].max()

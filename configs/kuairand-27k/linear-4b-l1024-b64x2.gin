@@ -1,6 +1,6 @@
 train_fn.dataset_name = "kuairand-27k"
 train_fn.max_sequence_length = 1024
-train_fn.local_batch_size = 64
+train_fn.local_batch_size = 8
 
 train_fn.main_module = "Fuxi-Linear"
 train_fn.dropout_rate = 0.5

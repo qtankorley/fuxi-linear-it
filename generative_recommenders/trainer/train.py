@@ -363,66 +363,87 @@ def train_fn(
                 src=target_ids.view(-1, 1),
             )
 
-            opt.zero_grad()
-            input_embeddings = model.module.get_item_embeddings(seq_features.past_ids)
-            seq_embeddings = model(
-                past_lengths=seq_features.past_lengths,
-                past_ids=seq_features.past_ids,
-                past_embeddings=input_embeddings,
-                past_payloads=seq_features.past_payloads,
-            )  # [B, X]
+# --- START GRADIENT ACCUMULATION BLOCK ---
+            accumulation_steps = 8
+            is_accumulating = (batch_id + 1) % accumulation_steps != 0
 
-            supervision_ids = seq_features.past_ids
+            # 1. Only zero the gradients at the start of a new 64-item cycle
+            if (batch_id % accumulation_steps) == 0:
+                opt.zero_grad()
 
-            if sampling_strategy == "in-batch":
-                # get_item_embeddings currently assume 1-d tensor.
-                in_batch_ids = supervision_ids.view(-1)
-                negatives_sampler.process_batch(
-                    ids=in_batch_ids,
-                    presences=(in_batch_ids != 0),
-                    embeddings=model.module.get_item_embeddings(in_batch_ids),
+            # 2. Setup the network silencer
+            import contextlib
+            sync_context = model.no_sync() if is_accumulating else contextlib.nullcontext()
+
+            # 3. Execute the forward and backward pass (Silenced if accumulating)
+            with sync_context:
+                input_embeddings = model.module.get_item_embeddings(seq_features.past_ids)
+                seq_embeddings = model(
+                    past_lengths=seq_features.past_lengths,
+                    past_ids=seq_features.past_ids,
+                    past_embeddings=input_embeddings,
+                    past_payloads=seq_features.past_payloads,
                 )
-            else:
-                negatives_sampler._item_emb = model.module._embedding_module._item_emb
 
-            ar_mask = supervision_ids[:, 1:] != 0
-            loss = ar_loss(
-                lengths=seq_features.past_lengths,  # [B],
-                output_embeddings=seq_embeddings[:, :-1, :],  # [B, N-1, D]
-                supervision_ids=supervision_ids[:, 1:],  # [B, N-1]
-                supervision_embeddings=input_embeddings[:, 1:, :],  # [B, N - 1, D]
-                supervision_weights=ar_mask.float(),
-                negatives_sampler=negatives_sampler,
-            )  # [B, N]
-            if rank == 0:
-                assert writer is not None
-                writer.add_scalar("losses/ar_loss", loss, batch_id)
+                supervision_ids = seq_features.past_ids
 
-            loss.backward()
+                if sampling_strategy == "in-batch":
+                    in_batch_ids = supervision_ids.view(-1)
+                    negatives_sampler.process_batch(
+                        ids=in_batch_ids,
+                        presences=(in_batch_ids != 0),
+                        embeddings=model.module.get_item_embeddings(in_batch_ids),
+                    )
+                else:
+                    negatives_sampler._item_emb = model.module._embedding_module._item_emb
 
-            # Optional linear warmup.
-            if batch_id < num_warmup_steps:
-                lr_scalar = min(1.0, float(batch_id + 1) / num_warmup_steps)
-                for pg in opt.param_groups:
-                    pg["lr"] = lr_scalar * learning_rate
-                lr = lr_scalar * learning_rate
-            else:
-                lr = learning_rate
-
-            if (batch_id % eval_interval) == 0:
-                logging.info(
-                    f" rank: {rank}, batch-stat (train): step {batch_id} "
-                    f"(epoch {epoch} in {time.time() - last_training_time:.2f}s): {loss:.6f}"
+                ar_mask = supervision_ids[:, 1:] != 0
+                loss = ar_loss(
+                    lengths=seq_features.past_lengths,
+                    output_embeddings=seq_embeddings[:, :-1, :],
+                    supervision_ids=supervision_ids[:, 1:],
+                    supervision_embeddings=input_embeddings[:, 1:, :],
+                    supervision_weights=ar_mask.float(),
+                    negatives_sampler=negatives_sampler,
                 )
-                last_training_time = time.time()
+
+                # 4. Scale the loss down to prevent gradient explosions!
+                loss = loss / accumulation_steps
+                loss.backward()
+
+            # 5. Only step the optimizer on the final accumulation step
+            if not is_accumulating:
+                global_step = (batch_id + 1) // accumulation_steps
+                
                 if rank == 0:
                     assert writer is not None
-                    writer.add_scalar("loss/train", loss, batch_id)
-                    writer.add_scalar("lr", lr, batch_id)
+                    # Multiply loss back up by 8 just for accurate logging
+                    writer.add_scalar("losses/ar_loss", loss.item() * accumulation_steps, global_step)
 
-            opt.step()
+                # Warmup logic (now tied to true global steps instead of micro-batches)
+                if global_step < num_warmup_steps:
+                    lr_scalar = min(1.0, float(global_step) / num_warmup_steps)
+                    for pg in opt.param_groups:
+                        pg["lr"] = lr_scalar * learning_rate
+                    lr = lr_scalar * learning_rate
+                else:
+                    lr = learning_rate
+
+                if (global_step % eval_interval) == 0:
+                    logging.info(
+                        f" rank: {rank}, batch-stat (train): step {global_step} "
+                        f"(epoch {epoch} in {time.time() - last_training_time:.2f}s): {loss.item() * accumulation_steps:.6f}"
+                    )
+                    last_training_time = time.time()
+                    if rank == 0:
+                        assert writer is not None
+                        writer.add_scalar("loss/train", loss.item() * accumulation_steps, global_step)
+                        writer.add_scalar("lr", lr, global_step)
+
+                opt.step()
 
             batch_id += 1
+            # --- END GRADIENT ACCUMULATION BLOCK ---
         train_elapse += time.time()
 
         def is_full_eval(epoch: int) -> bool:
