@@ -39,7 +39,7 @@ def chunkwise_forward(
     
   ic_decay_bkwd = torch.exp(-rearrange(log_ic_decay_bkwd, 's b h c -> s b c h'))
   tilde_k = k * ic_decay_bkwd.unsqueeze(-1)
-  ic_kv = torch.einsum('sbchk,sbchv->sbhkv', tilde_k, v)
+  ic_kv = torch.einsum('sbchk,sbchv->sbhkv', tilde_k.to(v.dtype), v)
   
   cw_decay = torch.exp(-log_cw_decay)
   if False :
@@ -55,12 +55,12 @@ def chunkwise_forward(
   
   ic_decay_frwd = torch.exp(-rearrange(log_ic_decay_frwd, 's b h c -> s b c h'))
   tilde_q = q * ic_decay_frwd.unsqueeze(-1)
-  y_cw = torch.einsum('sbchk,sbhkv->sbchv', tilde_q, hidden_states)
+  y_cw = torch.einsum('sbchk,sbhkv->sbchv', tilde_q, hidden_states.to(tilde_q.dtype))
   
   log_ic_decay = torch.clamp(foo[:, :, :, 1:, None] - foo[:, :, :, None, :-1], min=0)
   ic_decay = torch.exp(-log_ic_decay) * torch.tril(torch.ones(chunk_size, chunk_size, device=q.device))[None, None, None, :]
   ic_attnmap = torch.einsum('sbnhd,sbmhd->sbhnm', q, k) * ic_decay
-  y_ic = torch.einsum('sbhnm,sbmhd->sbnhd', ic_attnmap, v)
+  y_ic = torch.einsum('sbhnm,sbmhd->sbnhd', ic_attnmap.to(v.dtype), v)
   
   y = rearrange(y_cw + y_ic, 's b c h v -> b (s c) (h v)')
   return y

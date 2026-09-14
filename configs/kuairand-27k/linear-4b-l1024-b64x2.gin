@@ -1,6 +1,8 @@
 train_fn.dataset_name = "kuairand-27k"
 train_fn.max_sequence_length = 1024
 train_fn.local_batch_size = 8
+train_fn.eval_batch_size = 8
+train_fn.main_module_bf16 = True
 
 train_fn.main_module = "Fuxi-Linear"
 train_fn.dropout_rate = 0.5
@@ -34,6 +36,7 @@ train_fn.learning_rate = 1e-3
 train_fn.weight_decay = 0
 train_fn.num_warmup_steps = 0
 train_fn.interaction_module_type = "DotProduct"
+train_fn.save_ckpt_every_n = 25
 train_fn.top_k_method = "MIPSBruteForceTopK"
 
 train_fn.loss_module = "SampledSoftmaxLoss"

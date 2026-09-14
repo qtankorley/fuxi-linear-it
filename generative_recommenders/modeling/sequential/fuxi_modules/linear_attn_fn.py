@@ -22,13 +22,13 @@ class ChunkwiseHiddenStateFunction(Function):
         # 初始化隐藏状态
         current_hidden_state = torch.zeros(
             B, h, d_attn, d_v, 
-            dtype=inchunk_kv.dtype, 
+            dtype=torch.float32, 
             device=inchunk_kv.device
         )
         
         hidden_states = torch.zeros(
             num_chunks, B, h, d_attn, d_v,
-            dtype=inchunk_kv.dtype, 
+            dtype=torch.float32, 
             device=inchunk_kv.device
         )
         
@@ -78,7 +78,7 @@ class ChunkwiseHiddenStateFunction(Function):
         # 初始化隐藏状态的梯度
         grad_current_hidden = torch.zeros(
             B, h, d_attn, d_v, 
-            dtype=grad_hidden_states.dtype,
+            dtype=torch.float32,
             device=grad_hidden_states.device
         )
         
@@ -99,7 +99,7 @@ class ChunkwiseHiddenStateFunction(Function):
                 # 计算chunkwise_decay的梯度
                 # ∂L/∂decay_i = ∂L/∂h_i * ∂h_i/∂decay_i = grad_current_hidden * h_{i-1}
                 prev_hidden = state_list[i]  # h_{i-1}
-                grad_decay = torch.einsum('bhkv,bhkv->bh', grad_current_hidden, prev_hidden)
+                grad_decay = torch.einsum('bhkv,bhkv->bh', grad_current_hidden, prev_hidden.to(grad_current_hidden.dtype))
                 # grad_decay = (grad_current_hidden * prev_hidden).sum(dim=[-1, -2])  # 求和到[B, h]
                 if len(broadcast_dims) > 0 :
                     grad_decay = grad_decay.sum(dim=broadcast_dims)
@@ -127,11 +127,11 @@ class ChunkwiseHiddenStateFunction(Function):
             # 更新当前梯度为前一个时间步的梯度
             grad_current_hidden = grad_h if i == num_chunks - 1 else grad_current_hidden
         
-        return grad_inchunk_kv, grad_chunkwise_decay
+        return grad_inchunk_kv.to(inchunk_kv.dtype), grad_chunkwise_decay.to(chunkwise_decay.dtype)
 
 # 使用自定义算子的封装函数
 def eval_chunkwise_hidden_state_fn(inchunk_kv, chunkwise_decay):
-    return ChunkwiseHiddenStateFunction.apply(inchunk_kv, chunkwise_decay)
+    return ChunkwiseHiddenStateFunction.apply(inchunk_kv, chunkwise_decay.to(torch.float32))
 
 def chunkwise_parallel_forward(
     q: torch.Tensor,
@@ -155,21 +155,21 @@ def chunkwise_parallel_forward(
     inchunk_kv = torch.einsum('sbchk,sbchv->sbhkv', tilde_k, v)
     
     if q.requires_grad :
-        hidden_states = eval_chunkwise_hidden_state_fn(inchunk_kv, chunkwise_decay)
+        hidden_states = eval_chunkwise_hidden_state_fn(inchunk_kv, chunkwise_decay.to(torch.float32))
     else :
         state_list = []
-        current_hidden_state = torch.zeros(B, h, d_attn, d_v, dtype=q.dtype, device=q.device)
+        current_hidden_state = torch.zeros(B, h, d_attn, d_v, dtype=torch.float32, device=q.device)
         for i, (kv, cs_decay) in enumerate(zip(inchunk_kv, chunkwise_decay)) :
             state_list.append(current_hidden_state)
             if i != num_chunks - 1 :
-                current_hidden_state = current_hidden_state * cs_decay[:, :, None, None] + kv
+                current_hidden_state = current_hidden_state * cs_decay[:, :, None, None] + kv.to(torch.float32)
         hidden_states = torch.stack(state_list, dim=0)
     
     inchunk_attnmap = torch.einsum('sbnhd,sbmhd->sbhnm', q, k) * inchunk_decay
     y2 = torch.einsum('sbhnm,sbmhd->sbnhd', inchunk_attnmap, v)
     
     tilde_q = q * inchunk_decay_frwd.unsqueeze(-1)
-    y1 = torch.einsum('sbchk,sbhkv->sbchv', tilde_q, hidden_states)
+    y1 = torch.einsum('sbchk,sbhkv->sbchv', tilde_q, hidden_states.to(tilde_q.dtype))
     
     y = rearrange(y1 + y2, 's b c h d -> b (s c) (h d)')
     return y

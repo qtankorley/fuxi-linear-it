@@ -310,6 +310,10 @@ def train_fn(
                 device=device,
                 max_output_length=gr_output_length + 1,
             )
+            # Clamp past lengths to the max length of past_ids to avoid indexing errors
+            seq_features.past_lengths.clamp_(max=seq_features.past_ids.shape[1])
+            if seq_features.past_lengths.sum() == 0:
+                continue
 
             if (batch_id % eval_interval) == 0:
                 model.eval()

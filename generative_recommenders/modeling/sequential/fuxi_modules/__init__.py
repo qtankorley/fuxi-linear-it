@@ -49,7 +49,7 @@ class MultistageFeedforwardNeuralNetwork(torch.nn.Module) :
         X = (
             self.lin0(
                 F.dropout(
-                    X.to(self.dtype),
+                    X.to(torch.bfloat16),
                     p = self.dropout_ratio,
                     training = self.training
                 )
@@ -64,8 +64,8 @@ class MultistageFeedforwardNeuralNetwork(torch.nn.Module) :
             )
             X1 = F.silu(self.lin1(normed_X)) * self.lin3(normed_X)
             X = self.lin2(X1) + X
-        return X.to(torch.float32)
-    
+        return X.to(torch.bfloat16)
+
     def init(self) :
         with torch.no_grad() :
             self.lin0.weight.normal_(mean=0, std=0.02)
